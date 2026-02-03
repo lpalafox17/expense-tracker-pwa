@@ -25,6 +25,86 @@ type Budget = {
   created_at: string;
 };
 
+type Goal = {
+  id: string;
+  user_id: string;
+  title: string;
+  target_amount: number;
+  saved_amount: number;
+  target_date: string | null;
+  status: string;
+  created_at: string;
+};
+
+function extractAssistantTextFromUpstream(data: any): string {
+  if (!data) return "";
+  const cc = data?.choices?.[0]?.message?.content;
+  if (typeof cc === "string" && cc.trim()) return cc.trim();
+  const ot = data?.output_text;
+  if (typeof ot === "string" && ot.trim()) return ot.trim();
+  const output = data?.output;
+  if (Array.isArray(output)) {
+    const chunks: string[] = [];
+    for (const item of output) {
+      const content = item?.content;
+      if (!Array.isArray(content)) continue;
+      for (const c of content) {
+        if ((c?.type === "output_text" || c?.type === "text") && typeof c?.text === "string") {
+          chunks.push(c.text);
+        }
+      }
+    }
+    const joined = chunks.join("\n").trim();
+    if (joined) return joined;
+  }
+  const alt = data?.message?.content;
+  if (typeof alt === "string" && alt.trim()) return alt.trim();
+  return "";
+}
+
+function normalizeAssistantJson(raw: string) {
+  // If already JSON, return as-is.
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return JSON.stringify({
+        answer: typeof parsed.answer === "string" ? parsed.answer : raw,
+        suggestions: Array.isArray(parsed.suggestions)
+          ? parsed.suggestions.filter((s: any) => typeof s === "string").slice(0, 3)
+          : [],
+        action: parsed.action ?? null,
+      });
+    }
+  } catch {
+    // fall through
+  }
+
+  // Strip "Suggestions:" and "Action:" blocks from answer
+  let answer = raw;
+  const suggestions: string[] = [];
+  const suggestionsIdx = answer.indexOf("Suggestions:");
+  if (suggestionsIdx >= 0) {
+    const before = answer.slice(0, suggestionsIdx).trim();
+    const after = answer.slice(suggestionsIdx);
+    answer = before;
+    const quoted = after.match(/"([^"]+)"/g) ?? [];
+    for (const q of quoted) {
+      suggestions.push(q.replace(/(^")|("$)/g, ""));
+      if (suggestions.length >= 3) break;
+    }
+  }
+  const actionIdx = answer.indexOf("Action:");
+  if (actionIdx >= 0) {
+    answer = answer.slice(0, actionIdx).trim();
+  }
+
+  return JSON.stringify({
+    answer,
+    suggestions: suggestions.slice(0, 3),
+    action: null,
+  });
+}
+
 function monthKey(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -209,6 +289,17 @@ export async function POST(req: Request) {
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 6);
 
+    // Last month category breakdown (expenses only)
+    const lastCatMap = new Map<string, number>();
+    for (const t of lastMonthTxs) {
+      if (t.type !== "expense") continue;
+      lastCatMap.set(t.category, (lastCatMap.get(t.category) ?? 0) + Number(t.amount));
+    }
+    const topCategoriesLastMonth = Array.from(lastCatMap.entries())
+      .map(([category, amount]) => ({ category, amount: round2(amount) }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 6);
+
     // ✅ NEW: subscriptions this month (this is what your UI shows)
     const subsThisMonthRaw = thisMonthTxs
       .filter((t) => t.type === "expense" && t.category === "Subscriptions")
@@ -268,6 +359,20 @@ export async function POST(req: Request) {
       .sort((a, b) => (b.pctUsed ?? 0) - (a.pctUsed ?? 0))
       .slice(0, 10);
 
+    const { data: goalsData, error: goalsErr } = await supabase
+      .from("goals")
+      .select("id,user_id,title,target_amount,saved_amount,target_date,status,created_at")
+      .eq("user_id", userId);
+
+    if (goalsErr) {
+      return NextResponse.json(
+        { error: { message: `Supabase goals query failed: ${goalsErr.message}` } },
+        { status: 500 }
+      );
+    }
+
+    const goals = (goalsData ?? []) as Goal[];
+
     // Subscription detection window (6 months)
     const { data: tx6Data, error: tx6Err } = await supabase
       .from("transactions")
@@ -298,7 +403,16 @@ export async function POST(req: Request) {
         net: round2(thisNet),
       },
       topCategories,
+      topCategoriesLastMonth,
       budgetUsage,
+      goals: goals.map((g) => ({
+        id: g.id,
+        title: g.title,
+        target_amount: round2(Number(g.target_amount)),
+        saved_amount: round2(Number(g.saved_amount)),
+        target_date: g.target_date,
+        status: g.status,
+      })),
 
       // ✅ NEW: explicit subscription list for the selected month
       subscriptionsThisMonth, // [{ name, amountMonthly, amountAnnual }]
@@ -331,7 +445,26 @@ export async function POST(req: Request) {
         "Use ONLY the provided JSON context to answer.\n" +
         "Do not invent numbers. If a detail is missing, ask a short follow-up.\n" +
         "If the user asks about subscriptions, list each item in subscriptionsThisMonth with monthly + annual.\n" +
-        "Return concise, actionable advice.\n\n" +
+        "Return concise, actionable advice.\n" +
+        "You have both topCategories (this month) and topCategoriesLastMonth (last month) for comparisons.\n" +
+        "ALWAYS respond as a JSON object with keys: answer (string), suggestions (array of 3 short follow-up prompts), and action (object or null).\n" +
+        "If the user asks to add a transaction (e.g., \"Spent $18 on Starbucks today\"), set action to:\n" +
+        "{\"type\":\"create_transaction\",\"data\":{\"type\":\"expense\",\"amount\":18,\"category\":\"Other\",\"note\":null,\"occurred_on\":\"YYYY-MM-DD\"}}\n" +
+        "Do NOT invent notes or sources. If missing, leave note null and let the UI ask.\n" +
+        "If the user asks for a budget proposal (e.g., \"Make a budget for next month\"), set action to:\n" +
+        "{\"type\":\"propose_budgets\",\"data\":{\"month\":\"YYYY-MM\",\"items\":[{\"category\":\"Groceries\",\"limit\":200},{\"category\":\"Dining\",\"limit\":120}]}}\n" +
+        "If the user wants to create a goal (e.g., \"Save $500 by June\"), set action to:\n" +
+        "{\"type\":\"create_goal\",\"data\":{\"title\":\"Save $500\",\"target_amount\":500,\"target_date\":\"YYYY-MM-DD\",\"saved_amount\":0}}\n" +
+        "If the user asks to change a transaction (e.g., \"Change category for Marcos Tacos on 2026-02-02 to Dining\"), set action to:\n" +
+        "{\"type\":\"update_transaction\",\"data\":{\"match\":{\"note\":\"Marcos Tacos\",\"date\":\"YYYY-MM-DD\",\"category\":\"Dining\"},\"updates\":{\"category\":\"Dining\"}}}\n" +
+        "If the user asks to list or show transactions/expenses (e.g., \"Show all Dining transactions\", \"List all expenses for last month\"), set action to:\n" +
+        "{\"type\":\"list_transactions\",\"data\":{\"month\":\"YYYY-MM\",\"category\":\"Dining\",\"type\":\"expense\"}}\n" +
+        "If the user says expenses, set type to \"expense\". If they say income, set type to \"income\".\n" +
+        "If the user says \"this month\", use month = context.month.\n" +
+        "If the user says \"last month\", use comparisons.lastMonth for the month field.\n" +
+        "Otherwise, set action to null.\n" +
+        "IMPORTANT: Return ONLY the JSON. Do NOT include the words 'Suggestions:' or 'Action:' and do NOT include any other text outside the JSON.\n" +
+        "Example: {\"answer\":\"...\",\"suggestions\":[\"...\",\"...\",\"...\"],\"action\":null}\n\n" +
         "CONTEXT(JSON):\n" +
         JSON.stringify(context),
     };
@@ -389,8 +522,11 @@ export async function POST(req: Request) {
       );
     }
 
+    const assistantText = extractAssistantTextFromUpstream(data);
+    const normalizedJson = normalizeAssistantJson(assistantText || "");
+
     return NextResponse.json({
-      ...data,
+      output_text: normalizedJson,
       _context: context,
     });
   } catch (e: any) {

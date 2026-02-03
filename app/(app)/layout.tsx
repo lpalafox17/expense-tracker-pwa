@@ -12,6 +12,7 @@ const NAV = [
   { href: "/transactions", label: "Transactions", icon: "🧾" },
   { href: "/subscriptions", label: "Subscriptions", icon: "🔁" },
   { href: "/budgets", label: "Budgets", icon: "🎯" },
+  { href: "/goals", label: "Goals", icon: "🏁" },
   { href: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
@@ -147,7 +148,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       {/* Mobile bottom nav */}
       <nav className="fixed bottom-0 left-0 right-0 md:hidden border-t border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-950">
-        <div className="grid grid-cols-4">
+        <div
+          className={[
+            "grid",
+            NAV.filter((n) => n.href !== "/settings").length === 5 ? "grid-cols-5" : "grid-cols-4",
+          ].join(" ")}
+        >
           {NAV.filter((n) => n.href !== "/settings").map((item) => {
             const active = pathname === item.href;
             return (

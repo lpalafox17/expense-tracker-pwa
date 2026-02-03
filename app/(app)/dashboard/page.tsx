@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { getCategoryMeta } from "../lib/categories";
+import { formatDateMDY } from "../lib/date";
 
 // ✅ IMPORTANT: update this import to the real path of your modal file
 // Examples:
@@ -66,9 +67,7 @@ function daysInMonth(yyyy: number, mm1to12: number) {
 }
 
 function niceDate(iso: string) {
-  const [y, m, d] = iso.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  return dt.toLocaleString(undefined, { month: "short", day: "numeric" });
+  return formatDateMDY(iso);
 }
 
 /** Simple SVG bar chart for daily expenses */

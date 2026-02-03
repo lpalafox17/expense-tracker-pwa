@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { CATEGORIES, getCategoryMeta } from "../lib/categories";
+import { formatDateMDY } from "../lib/date";
 
 type TxType = "expense" | "income";
 
@@ -277,7 +278,7 @@ export default function TransactionsPage() {
                     </div>
                   </div>
 
-                  <div className="text-sm tabular-nums">{t.occurred_on}</div>
+                  <div className="text-sm tabular-nums">{formatDateMDY(t.occurred_on)}</div>
 
                   <div
                     className={[
@@ -307,7 +308,7 @@ export default function TransactionsPage() {
                       <span className={`rounded-full border px-3 py-1 text-xs ${meta.chipClass}`}>
                         {meta.icon} {meta.name}
                       </span>
-                      <span className="text-xs text-zinc-500 dark:text-zinc-300">{t.occurred_on}</span>
+                      <span className="text-xs text-zinc-500 dark:text-zinc-300">{formatDateMDY(t.occurred_on)}</span>
                       <span
                         className={[
                           "rounded-full border px-3 py-1 text-xs",

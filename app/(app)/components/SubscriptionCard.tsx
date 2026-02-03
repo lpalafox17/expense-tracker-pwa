@@ -1,6 +1,7 @@
 "use client";
 
 import { BTN_GHOST, MUTED } from "../subscriptions/lib/ui";
+import { formatDateMDY } from "../lib/date";
 
 function money(n: number) {
   return `$${Number(n).toFixed(2)}`;
@@ -91,7 +92,8 @@ export default function SubscriptionCard({
             </div>
 
             <p className={`mt-1 text-sm ${MUTED}`}>
-              {occurredOn} • <span className="font-semibold text-zinc-900 dark:text-zinc-50">{money(amt)}</span>{" "}
+              {formatDateMDY(occurredOn)} •{" "}
+              <span className="font-semibold text-zinc-900 dark:text-zinc-50">{money(amt)}</span>{" "}
               <span className="opacity-70">/ mo</span>
             </p>
 
