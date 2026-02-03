@@ -24,3 +24,28 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Hide Next.js dev tools/indicator bubble (prevents it from blocking mobile UI) */
+#nextjs__container,
+#nextjs__dev-tools,
+#__next-build-watcher,
+#__next-prerender-indicator {
+  display: none !important;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes modalIn {
+  from { transform: translateY(18px) scale(0.98); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes modalOut {
+  from { transform: translateY(0) scale(1); opacity: 1; }
+  to   { transform: translateY(18px) scale(0.98); opacity: 0; }
+}
