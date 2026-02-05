@@ -578,7 +578,9 @@ export default function AddTransactionModal({
             setCategory(r.category);
           }
 
-          const noteParts = [r.merchant, r.note].filter((x): x is string => typeof x === "string" && x.trim());
+          const noteParts = [r.merchant, r.note].filter(
+            (x): x is string => typeof x === "string" && x.trim().length > 0
+          );
           if (noteParts.length) setNote(noteParts.join(" • ").slice(0, 200));
 
           setScanOpen(false);
