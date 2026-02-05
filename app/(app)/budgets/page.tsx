@@ -343,7 +343,7 @@ export default function BudgetsPage() {
         </div>
 
         {/* Category chips (VISIBLE in light mode) */}
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 -mx-1 flex flex-wrap content-start gap-2 px-1 pb-2 max-h-36 overflow-y-auto sm:max-h-40">
           {CATEGORIES.map((c) => {
             const meta = getCategoryMeta(c.name);
             const active = c.name === category;

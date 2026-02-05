@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { CATEGORIES, getCategoryMeta } from "../lib/categories";
 import { formatDateMDY } from "../lib/date";
+import { ensureRecurringTransactions } from "../lib/recurring";
 
 type TxType = "expense" | "income";
 
@@ -15,6 +16,17 @@ type Tx = {
   category: string;
   note: string | null;
   occurred_on: string;
+  created_at: string;
+};
+
+type RecurringBill = {
+  id: string;
+  user_id: string;
+  name: string;
+  amount: number;
+  category: string;
+  due_day: number;
+  pay_early_days: number;
   created_at: string;
 };
 
@@ -32,6 +44,32 @@ function monthLabel(key: string) {
 
 function money(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function daysInMonth(yyyy: number, mm1to12: number) {
+  return new Date(yyyy, mm1to12, 0).getDate();
+}
+
+function nextDueDate(dueDay: number) {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = today.getMonth() + 1;
+  const dim = daysInMonth(yyyy, mm);
+  const day = Math.min(dueDay, dim);
+  const candidate = new Date(yyyy, mm - 1, day);
+  if (candidate >= new Date(yyyy, mm - 1, today.getDate())) {
+    return candidate;
+  }
+  const nextMonth = new Date(yyyy, mm, 1);
+  const dimNext = daysInMonth(nextMonth.getFullYear(), nextMonth.getMonth() + 1);
+  return new Date(nextMonth.getFullYear(), nextMonth.getMonth(), Math.min(dueDay, dimNext));
+}
+
+function daysUntil(date: Date) {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return Math.round((target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 const SURFACE =
@@ -53,6 +91,13 @@ export default function TransactionsPage() {
   const [loading, setLoading] = useState(true);
   const [txs, setTxs] = useState<Tx[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
+  const [bills, setBills] = useState<RecurringBill[]>([]);
+  const [billMsg, setBillMsg] = useState("");
+  const [billName, setBillName] = useState("");
+  const [billAmount, setBillAmount] = useState("");
+  const [billCategory, setBillCategory] = useState("Other");
+  const [billDueDay, setBillDueDay] = useState("");
+  const [billPayEarly, setBillPayEarly] = useState("3");
 
   const [selectedMonth, setSelectedMonth] = useState(() => monthKey(new Date()));
   const [typeFilter, setTypeFilter] = useState<TxType | "all">("all");
@@ -75,6 +120,12 @@ export default function TransactionsPage() {
     setLoading(true);
     setErrorMsg("");
 
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData?.user?.id;
+    if (userId) {
+      await ensureRecurringTransactions(userId);
+    }
+
     const { data, error } = await supabase
       .from("transactions")
       .select("*")
@@ -85,6 +136,17 @@ export default function TransactionsPage() {
       setTxs([]);
     } else {
       setTxs((data ?? []) as Tx[]);
+    }
+
+    if (userId) {
+      const { data: billData, error: billErr } = await supabase
+        .from("recurring_bills")
+        .select("id,user_id,name,amount,category,due_day,pay_early_days,created_at")
+        .eq("user_id", userId)
+        .order("due_day", { ascending: true });
+      if (!billErr) {
+        setBills((billData ?? []) as RecurringBill[]);
+      }
     }
 
     setLoading(false);
@@ -121,6 +183,55 @@ export default function TransactionsPage() {
     if (!error) window.dispatchEvent(new Event("tx:changed"));
   };
 
+  const addBill = async () => {
+    setBillMsg("");
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData?.user?.id;
+    if (!userId) {
+      setBillMsg("Not logged in.");
+      return;
+    }
+    const amt = Number(billAmount);
+    const dueDay = Number(billDueDay);
+    const payEarly = Number(billPayEarly);
+    if (!billName.trim()) {
+      setBillMsg("Please enter a bill name.");
+      return;
+    }
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setBillMsg("Amount must be a positive number.");
+      return;
+    }
+    if (!Number.isFinite(dueDay) || dueDay < 1 || dueDay > 31) {
+      setBillMsg("Due day must be 1–31.");
+      return;
+    }
+    const { error } = await supabase.from("recurring_bills").insert({
+      user_id: userId,
+      name: billName.trim(),
+      amount: amt,
+      category: billCategory,
+      due_day: dueDay,
+      pay_early_days: Number.isFinite(payEarly) ? payEarly : 3,
+    });
+    if (error) {
+      setBillMsg(error.message);
+      return;
+    }
+    setBillName("");
+    setBillAmount("");
+    setBillDueDay("");
+    setBillPayEarly("3");
+    await ensureRecurringTransactions(userId);
+    window.dispatchEvent(new Event("tx:changed"));
+    fetchTx();
+  };
+
+  const deleteBill = async (id: string) => {
+    const { error } = await supabase.from("recurring_bills").delete().eq("id", id);
+    if (!error) fetchTx();
+  };
+
   return (
     <div className="relative isolate space-y-6 animate-[fadeIn_700ms_ease-out]">
       <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
@@ -141,8 +252,10 @@ export default function TransactionsPage() {
         </button>
       </div>
 
-      {/* Filters */}
-      <div className={`${SURFACE} grid gap-3 lg:grid-cols-4`}>
+      <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+        <div className="space-y-6">
+          {/* Filters */}
+          <div className={`${SURFACE} grid gap-3 lg:grid-cols-4`}>
         <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className={SURFACE_SOFT}>
           {monthOptions.map((m) => (
             <option key={m} value={m}>
@@ -172,46 +285,46 @@ export default function TransactionsPage() {
           placeholder="Search note/category/amount"
           className={SURFACE_SOFT}
         />
-      </div>
+          </div>
 
-      {/* Summary */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className={SURFACE}>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Income</p>
-          <p className="text-3xl font-semibold text-emerald-700 dark:text-emerald-300">
-            ${money(summary.income)}
-          </p>
-          <div className="mt-3 h-1 w-full rounded-full bg-gradient-to-r from-emerald-400 via-emerald-500 to-cyan-400" />
-        </div>
-        <div className={SURFACE}>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Expenses</p>
-          <p className="text-3xl font-semibold text-rose-600 dark:text-rose-300">
-            ${money(summary.expense)}
-          </p>
-          <div className="mt-3 h-1 w-full rounded-full bg-gradient-to-r from-rose-400 via-rose-500 to-orange-400" />
-        </div>
-        <div className={SURFACE}>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Net</p>
-          <p
-            className={`text-3xl font-semibold ${
-              summary.net < 0 ? "text-rose-600 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300"
-            }`}
-          >
-            ${money(summary.net)}
-          </p>
-          <div
-            className={[
-              "mt-3 h-1 w-full rounded-full",
-              summary.net < 0
-                ? "bg-gradient-to-r from-rose-400 via-rose-500 to-orange-400"
-                : "bg-gradient-to-r from-emerald-400 via-emerald-500 to-cyan-400",
-            ].join(" ")}
-          />
-        </div>
-      </div>
+          {/* Summary */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className={SURFACE}>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Income</p>
+              <p className="text-3xl font-semibold text-emerald-700 dark:text-emerald-300">
+                ${money(summary.income)}
+              </p>
+              <div className="mt-3 h-1 w-full rounded-full bg-gradient-to-r from-emerald-400 via-emerald-500 to-cyan-400" />
+            </div>
+            <div className={SURFACE}>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Expenses</p>
+              <p className="text-3xl font-semibold text-rose-600 dark:text-rose-300">
+                ${money(summary.expense)}
+              </p>
+              <div className="mt-3 h-1 w-full rounded-full bg-gradient-to-r from-rose-400 via-rose-500 to-orange-400" />
+            </div>
+            <div className={SURFACE}>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Net</p>
+              <p
+                className={`text-3xl font-semibold ${
+                  summary.net < 0 ? "text-rose-600 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300"
+                }`}
+              >
+                ${money(summary.net)}
+              </p>
+              <div
+                className={[
+                  "mt-3 h-1 w-full rounded-full",
+                  summary.net < 0
+                    ? "bg-gradient-to-r from-rose-400 via-rose-500 to-orange-400"
+                    : "bg-gradient-to-r from-emerald-400 via-emerald-500 to-cyan-400",
+                ].join(" ")}
+              />
+            </div>
+          </div>
 
-      {/* Feed */}
-      <div className="space-y-3">
+          {/* Feed */}
+          <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-lg font-semibold">Transactions</h3>
           <div className="inline-flex rounded-full border border-zinc-200/70 bg-white/70 p-1 dark:border-white/10 dark:bg-white/5">
@@ -338,6 +451,104 @@ export default function TransactionsPage() {
             </div>
           );
         })}
+          </div>
+        </div>
+
+        <div className={`${SURFACE} h-fit`}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold">Recurring bills</p>
+              <p className="text-xs opacity-70">Due soon + upcoming</p>
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs opacity-80">
+              {bills.length} total
+            </span>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {bills.map((b) => {
+              const due = nextDueDate(b.due_day);
+              const days = daysUntil(due);
+              const dueSoon = days <= b.pay_early_days;
+              return (
+                <div key={b.id} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold">{b.name}</p>
+                    <span className="text-sm font-semibold">{money(b.amount)}</span>
+                  </div>
+                  <p className="mt-1 text-xs opacity-70">
+                    {b.category} • Due {formatDateMDY(due.toISOString().slice(0, 10))} • Pay {b.pay_early_days}d early
+                  </p>
+                  {dueSoon && (
+                    <span className="mt-2 inline-flex rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-200">
+                      Due soon
+                    </span>
+                  )}
+                  <div className="mt-2 flex justify-end">
+                    <button onClick={() => deleteBill(b.id)} className={BTN_GHOST}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {bills.length === 0 && (
+              <p className="text-sm opacity-70">No recurring bills yet.</p>
+            )}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
+            <p className="text-sm font-semibold">Add a bill</p>
+            <div className="mt-2 space-y-2">
+              <input
+                value={billName}
+                onChange={(e) => setBillName(e.target.value)}
+                placeholder="Name (Rent, Car Payment)"
+                className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm outline-none"
+              />
+              <input
+                value={billAmount}
+                onChange={(e) => setBillAmount(e.target.value)}
+                placeholder="Amount"
+                className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm outline-none"
+                inputMode="decimal"
+              />
+              <select
+                value={billCategory}
+                onChange={(e) => setBillCategory(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm outline-none"
+              >
+                {CATEGORIES.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.icon} {c.name}
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-2">
+                <input
+                  value={billDueDay}
+                  onChange={(e) => setBillDueDay(e.target.value)}
+                  placeholder="Due day (1-31)"
+                  className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm outline-none"
+                  inputMode="numeric"
+                />
+                <input
+                  value={billPayEarly}
+                  onChange={(e) => setBillPayEarly(e.target.value)}
+                  placeholder="Pay early (days)"
+                  className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm outline-none"
+                  inputMode="numeric"
+                />
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <button onClick={addBill} className={BTN_GHOST}>
+                Add bill
+              </button>
+              {billMsg && <span className="text-xs text-emerald-300">{billMsg}</span>}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

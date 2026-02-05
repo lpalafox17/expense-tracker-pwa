@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { matchRecurringForTransaction } from "../lib/recurring";
 import { CATEGORIES, getCategoryMeta } from "../lib/categories";
+import ReceiptScanModal from "./ReceiptScanModal";
+import { assertDateIsInCurrentMonth, currentMonthKey, firstDayOfMonthISO, isDateInMonth } from "../lib/monthLock";
 
 type TxType = "expense" | "income";
 const INCOME_CATEGORY = "Income";
@@ -43,6 +46,7 @@ export default function AddTransactionModal({
   onClose: () => void;
 }) {
   const [closing, setClosing] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
 
   const [type, setType] = useState<TxType>("expense");
   const [amount, setAmount] = useState("");
@@ -63,6 +67,7 @@ export default function AddTransactionModal({
   useEffect(() => {
     if (!open) return;
     setClosing(false);
+    setScanOpen(false);
     setSaving(false);
     setErrorMsg("");
     const prefs = readIncomePrefs();
@@ -102,6 +107,12 @@ export default function AddTransactionModal({
       return;
     }
 
+    const lock = assertDateIsInCurrentMonth(occurredOn);
+    if (!lock.ok) {
+      setErrorMsg(lock.message);
+      return;
+    }
+
     setSaving(true);
 
     const { data: sessionData } = await supabase.auth.getSession();
@@ -120,6 +131,17 @@ export default function AddTransactionModal({
             .join(" • ")
         : note.trim();
 
+    let recurringIds: { subscription_id?: string; recurring_bill_id?: string } = {};
+    if (type === "expense") {
+      recurringIds = await matchRecurringForTransaction({
+        userId,
+        occurredOn: occurredOn,
+        note: noteValue ? noteValue : "",
+        amount: amt,
+        category,
+      });
+    }
+
     const { error } = await supabase.from("transactions").insert({
       user_id: userId,
       type,
@@ -127,6 +149,7 @@ export default function AddTransactionModal({
       category,
       note: noteValue ? noteValue : null,
       occurred_on: occurredOn,
+      ...recurringIds,
     });
 
     if (error) {
@@ -168,6 +191,7 @@ export default function AddTransactionModal({
   if (!open) return null;
 
   return (
+    <>
     <div
       className={[
         "fixed inset-0 z-50 flex items-end md:items-center justify-center p-3",
@@ -209,18 +233,34 @@ export default function AddTransactionModal({
             </p>
           </div>
 
-          <button
-            onClick={closeWithAnim}
-            className={[
-              "rounded-2xl px-3 py-2 transition",
-              "border border-zinc-200 bg-zinc-50 hover:bg-zinc-100",
-              "dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10",
-            ].join(" ")}
-            title="Close"
-            aria-label="Close"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setScanOpen(true)}
+              disabled={saving || type !== "expense"}
+              className={[
+                "rounded-2xl px-3 py-2 text-sm font-semibold transition",
+                "border border-zinc-200 bg-zinc-50 hover:bg-zinc-100",
+                "dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10",
+                saving || type !== "expense" ? "opacity-60 cursor-not-allowed" : "",
+              ].join(" ")}
+              title={type !== "expense" ? "Receipt scan is for expenses" : "Scan a receipt photo"}
+            >
+              Scan receipt
+            </button>
+
+            <button
+              onClick={closeWithAnim}
+              className={[
+                "rounded-2xl px-3 py-2 transition",
+                "border border-zinc-200 bg-zinc-50 hover:bg-zinc-100",
+                "dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10",
+              ].join(" ")}
+              title="Close"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* Segmented control */}
@@ -378,7 +418,7 @@ export default function AddTransactionModal({
               ].join(" ")}
             >
               <p className="text-sm text-zinc-600 dark:text-zinc-300">Category</p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 -mx-1 flex flex-wrap content-start gap-2 px-1 pb-2 max-h-36 overflow-y-auto sm:max-h-40">
                 {CATEGORIES.map((c) => {
                   const m = getCategoryMeta(c.name);
                   const selected = c.name === category;
@@ -415,7 +455,18 @@ export default function AddTransactionModal({
               <input
                 type="date"
                 value={occurredOn}
-                onChange={(e) => setOccurredOn(e.target.value)}
+                min={firstDayOfMonthISO(currentMonthKey())}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (!next) return;
+                  const cur = currentMonthKey();
+                  if (!isDateInMonth(next, cur)) {
+                    setErrorMsg(`Locked: pick a date in ${cur}.`);
+                    return;
+                  }
+                  setErrorMsg("");
+                  setOccurredOn(next);
+                }}
                 className={[
                   "w-full rounded-2xl border px-3 py-2 outline-none transition",
                   "border-zinc-200 bg-white hover:bg-zinc-100 focus:ring-2 focus:ring-emerald-500/30",
@@ -510,5 +561,30 @@ export default function AddTransactionModal({
         }
       `}</style>
     </div>
+    {scanOpen ? (
+      <ReceiptScanModal
+        onClose={() => setScanOpen(false)}
+        onApply={(r) => {
+          if (typeof r.total === "number" && Number.isFinite(r.total) && r.total > 0) {
+            setAmount(r.total.toFixed(2));
+          }
+          if (typeof r.occurred_on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.occurred_on)) {
+            const cur = currentMonthKey();
+            if (isDateInMonth(r.occurred_on, cur)) {
+              setOccurredOn(r.occurred_on);
+            }
+          }
+          if (typeof r.category === "string" && r.category) {
+            setCategory(r.category);
+          }
+
+          const noteParts = [r.merchant, r.note].filter((x): x is string => typeof x === "string" && x.trim());
+          if (noteParts.length) setNote(noteParts.join(" • ").slice(0, 200));
+
+          setScanOpen(false);
+        }}
+      />
+    ) : null}
+    </>
   );
 }

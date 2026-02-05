@@ -20,6 +20,15 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## AI / Computer Vision (Receipt Scan)
+
+There is a “Scan receipt” button inside the **Add transaction** modal:
+
+- Client-side preprocessing: fast auto-crop using edge detection
+- Server-side extraction: `/api/receipt` calls the configured Azure Foundry (Azure OpenAI) endpoint with image input and returns strict JSON
+
+Learning notes: `docs/receipt-scan-cv.md`
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

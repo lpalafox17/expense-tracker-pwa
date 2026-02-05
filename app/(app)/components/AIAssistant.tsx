@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { CATEGORIES } from "../lib/categories";
 import { formatDateMDY } from "../lib/date";
+import { matchRecurringForTransaction } from "../lib/recurring";
+import { assertDateIsInCurrentMonth } from "../lib/monthLock";
 
 type Msg = {
   id: string;
@@ -1016,6 +1018,12 @@ export default function AIAssistant() {
                           ? (pendingAction.data?.occurred_on as string)
                           : todayISO();
 
+                        const lock = assertDateIsInCurrentMonth(occurred_on);
+                        if (!lock.ok) {
+                          setActionMsg(lock.message);
+                          return;
+                        }
+
                         if (type === "income") {
                           const parts = [
                             actionAccount ? `Account: ${actionAccount}` : "",
@@ -1033,6 +1041,17 @@ export default function AIAssistant() {
                           return;
                         }
 
+                        let recurringIds: { subscription_id?: string; recurring_bill_id?: string } = {};
+                        if (type === "expense") {
+                          recurringIds = await matchRecurringForTransaction({
+                            userId,
+                            occurredOn: occurred_on,
+                            note: note ?? "",
+                            amount: amt,
+                            category,
+                          });
+                        }
+
                         const { error } = await supabase.from("transactions").insert({
                           user_id: userId,
                           type,
@@ -1040,6 +1059,7 @@ export default function AIAssistant() {
                           category,
                           note,
                           occurred_on,
+                          ...recurringIds,
                         });
                         if (error) {
                           setActionMsg(error.message);

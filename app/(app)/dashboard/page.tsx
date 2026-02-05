@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { getCategoryMeta } from "../lib/categories";
 import { formatDateMDY } from "../lib/date";
+import { ensureRecurringTransactions } from "../lib/recurring";
 
 // ✅ IMPORTANT: update this import to the real path of your modal file
 // Examples:
@@ -18,6 +19,21 @@ type Tx = {
   category: string;
   note: string | null;
   occurred_on: string; // YYYY-MM-DD
+};
+
+type Balance = {
+  amount: number;
+};
+
+type Paycheck = {
+  amount: number;
+  pay_date: string;
+  source: string | null;
+};
+
+type Subscription = {
+  amount_monthly: number;
+  billing_day: number;
 };
 
 function monthKey(d: Date): string {
@@ -157,6 +173,9 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [txs, setTxs] = useState<Tx[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
+  const [availableBalance, setAvailableBalance] = useState<number | null>(null);
+  const [nextPaycheck, setNextPaycheck] = useState<Paycheck | null>(null);
+  const [subs, setSubs] = useState<Subscription[]>([]);
 
   const [selectedMonth, setSelectedMonth] = useState(() => monthKey(new Date()));
 
@@ -181,6 +200,12 @@ export default function DashboardPage() {
     const { start: startLast } = monthRange(lastMonthKey);
     const { end: endThis } = monthRange(thisMonthKey);
 
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData?.user?.id;
+    if (userId) {
+      await ensureRecurringTransactions(userId);
+    }
+
     const { data, error } = await supabase
       .from("transactions")
       .select("id,type,amount,category,note,occurred_on")
@@ -196,6 +221,34 @@ export default function DashboardPage() {
     }
 
     setTxs((data ?? []) as Tx[]);
+    if (userId) {
+      const [balRes, payRes, subRes] = await Promise.all([
+        supabase.from("balances").select("amount").eq("user_id", userId).maybeSingle(),
+        supabase
+          .from("paychecks")
+          .select("amount,pay_date,source")
+          .eq("user_id", userId)
+          .gte("pay_date", new Date().toISOString().slice(0, 10))
+          .order("pay_date", { ascending: true })
+          .limit(1),
+        supabase
+          .from("subscriptions")
+          .select("amount_monthly,billing_day")
+          .eq("user_id", userId),
+      ]);
+      if (!balRes.error && balRes.data) {
+        const b = balRes.data as Balance;
+        setAvailableBalance(Number(b.amount));
+      }
+      if (!payRes.error && payRes.data && payRes.data.length) {
+        setNextPaycheck(payRes.data[0] as Paycheck);
+      } else {
+        setNextPaycheck(null);
+      }
+      if (!subRes.error) {
+        setSubs((subRes.data ?? []) as Subscription[]);
+      }
+    }
     setLoading(false);
   }, [thisMonthKey, lastMonthKey]);
 
@@ -235,7 +288,13 @@ export default function DashboardPage() {
     [thisMonthTxs]
   );
 
-  const net = useMemo(() => income - expenses, [income, expenses]);
+  const net = useMemo(() => {
+    const todayDay = new Date().getDate();
+    const dueToday = subs
+      .filter((s) => s.billing_day === todayDay)
+      .reduce((s, x) => s + Number(x.amount_monthly), 0);
+    return income - expenses + (availableBalance || 0) - dueToday;
+  }, [income, expenses, availableBalance, subs]);
 
   const lastExpenses = useMemo(
     () =>
@@ -373,19 +432,19 @@ export default function DashboardPage() {
         )}
 
         {/* Metrics */}
-        <div className="grid gap-3 lg:grid-cols-3">
-          <div className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-zinc-950/60">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm opacity-70">Income</p>
-                <p className="mt-1 text-3xl font-bold tabular-nums">{money(income)}</p>
-                <p className="mt-2 text-sm opacity-60">This month</p>
-              </div>
-              <div className="h-11 w-11 rounded-2xl border border-zinc-200 bg-zinc-50 flex items-center justify-center dark:border-white/10 dark:bg-white/5">
-                💰
+        <div className="grid gap-3 lg:grid-cols-4">
+            <div className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-zinc-950/60">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm opacity-70">Deposits</p>
+                  <p className="mt-1 text-3xl font-bold tabular-nums">{money(income)}</p>
+                  <p className="mt-2 text-sm opacity-60">This month</p>
+                </div>
+                <div className="h-11 w-11 rounded-2xl border border-zinc-200 bg-zinc-50 flex items-center justify-center dark:border-white/10 dark:bg-white/5">
+                  💰
+                </div>
               </div>
             </div>
-          </div>
 
           <div className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-zinc-950/60">
             <div className="flex items-start justify-between gap-3">
@@ -410,15 +469,34 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-zinc-950/60">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm opacity-70">Net</p>
-                <p className="mt-1 text-3xl font-bold tabular-nums">{money(net)}</p>
-                <p className="mt-2 text-sm opacity-60">Income − Expenses</p>
+            <div className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-zinc-950/60">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm opacity-70">Available income</p>
+                  <p className="mt-1 text-3xl font-bold tabular-nums">{money(net)}</p>
+                  <p className="mt-2 text-sm opacity-60">Deposits − Expenses + Available balance</p>
+                </div>
+                <div className="h-11 w-11 rounded-2xl border border-zinc-200 bg-zinc-50 flex items-center justify-center dark:border-white/10 dark:bg-white/5">
+                  📈
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-zinc-950/60">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm opacity-70">Available balance</p>
+                  <p className="mt-1 text-3xl font-bold tabular-nums">
+                    {availableBalance == null ? "—" : money(availableBalance)}
+                  </p>
+                  <p className="mt-2 text-sm opacity-60">
+                    {nextPaycheck
+                      ? `Next: ${formatDateMDY(nextPaycheck.pay_date)}`
+                      : "No upcoming paycheck"}
+                </p>
               </div>
               <div className="h-11 w-11 rounded-2xl border border-zinc-200 bg-zinc-50 flex items-center justify-center dark:border-white/10 dark:bg-white/5">
-                📈
+                💵
               </div>
             </div>
           </div>

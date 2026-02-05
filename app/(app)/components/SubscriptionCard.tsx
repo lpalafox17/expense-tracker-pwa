@@ -1,7 +1,6 @@
 "use client";
 
 import { BTN_GHOST, MUTED } from "../subscriptions/lib/ui";
-import { formatDateMDY } from "../lib/date";
 
 function money(n: number) {
   return `$${Number(n).toFixed(2)}`;
@@ -29,16 +28,16 @@ function pickBrandEmoji(name: string) {
 
 export default function SubscriptionCard({
   name,
-  occurredOn,
+  billingDay,
   amount,
-  total,
+  totalMonthly,
   onEdit,
   onDelete,
 }: {
   name: string;
-  occurredOn: string;
+  billingDay: number;
   amount: number;
-  total: number;
+  totalMonthly: number;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -54,25 +53,21 @@ export default function SubscriptionCard({
       ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-200"
       : "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-200";
 
-  const fillColor = amt >= 50 ? "#ef4444" : amt >= 20 ? "#f59e0b" : "#22c55e";
-  const pct = Math.round(100 * (total > 0 ? clamp(amt / total, 0, 1) : 0));
+  const pct = Math.round(100 * (totalMonthly > 0 ? clamp(amt / totalMonthly, 0, 1) : 0));
 
   return (
     <div
       onClick={onEdit}
       className={[
         "group cursor-pointer rounded-3xl border p-4 transition hover:-translate-y-0.5",
-        // light mode
         "border-zinc-200/70 bg-white/70 shadow-[0_10px_30px_-24px_rgba(0,0,0,0.45)] backdrop-blur",
         "hover:bg-white",
-        // dark mode
         "dark:border-white/10 dark:bg-white/5 dark:shadow-none",
         "dark:hover:bg-white/10 dark:hover:translate-y-0",
       ].join(" ")}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
-          {/* icon tile */}
           <div
             className={[
               "h-10 w-10 shrink-0 rounded-2xl border flex items-center justify-center text-lg",
@@ -92,7 +87,7 @@ export default function SubscriptionCard({
             </div>
 
             <p className={`mt-1 text-sm ${MUTED}`}>
-              {formatDateMDY(occurredOn)} •{" "}
+              Bills on day {billingDay} •{" "}
               <span className="font-semibold text-zinc-900 dark:text-zinc-50">{money(amt)}</span>{" "}
               <span className="opacity-70">/ mo</span>
             </p>
@@ -113,7 +108,6 @@ export default function SubscriptionCard({
           </div>
         </div>
 
-        {/* actions */}
         <div className="flex items-center gap-2">
           <div className="hidden sm:flex items-center text-xs font-medium text-zinc-500 dark:text-zinc-400">
             {pct}%
@@ -124,11 +118,7 @@ export default function SubscriptionCard({
               e.stopPropagation();
               onDelete();
             }}
-            className={[
-              BTN_GHOST,
-              "px-3 py-2",
-              "hover:scale-[1.02] active:scale-[0.98]",
-            ].join(" ")}
+            className={[BTN_GHOST, "px-3 py-2", "hover:scale-[1.02] active:scale-[0.98]"].join(" ")}
             title="Delete"
           >
             🗑️
@@ -136,21 +126,13 @@ export default function SubscriptionCard({
         </div>
       </div>
 
-      {/* progress bar */}
       <div className="mt-4">
         <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
-          <span>Share of month</span>
-          <span className="tabular-nums">{pct}%</span>
+          <span>Share of monthly spend</span>
+          <span>{pct}%</span>
         </div>
-
-        <div className="mt-2 h-2.5 w-full rounded-full overflow-hidden border bg-zinc-100 border-zinc-200 dark:bg-white/5 dark:border-white/10">
-          <div
-            className="h-full rounded-full transition-[width] duration-300"
-            style={{
-              width: `${pct}%`,
-              background: fillColor,
-            }}
-          />
+        <div className="mt-2 h-2 w-full rounded-full bg-zinc-100 dark:bg-white/10">
+          <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
         </div>
       </div>
     </div>

@@ -300,31 +300,27 @@ export async function POST(req: Request) {
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 6);
 
-    // ✅ NEW: subscriptions this month (this is what your UI shows)
-    const subsThisMonthRaw = thisMonthTxs
-      .filter((t) => t.type === "expense" && t.category === "Subscriptions")
-      .map((t) => ({
-        id: t.id,
-        name: (t.note || "Subscription").trim(),
-        amountMonthly: round2(Number(t.amount)),
-        amountAnnual: round2(Number(t.amount) * 12),
-        occurred_on: t.occurred_on,
-      }))
-      .sort((a, b) => b.amountMonthly - a.amountMonthly);
+    const { data: subsData, error: subsErr } = await supabase
+      .from("subscriptions")
+      .select("id,user_id,name,amount_monthly,billing_day,created_at")
+      .eq("user_id", userId);
 
-    // Group duplicates (same name) -> combined monthly + annual
-    const subAgg = new Map<string, { name: string; amountMonthly: number; amountAnnual: number }>();
-    for (const s of subsThisMonthRaw) {
-      const key = normalizeNote(s.name);
-      const prev = subAgg.get(key);
-      if (!prev) {
-        subAgg.set(key, { name: s.name, amountMonthly: s.amountMonthly, amountAnnual: s.amountAnnual });
-      } else {
-        prev.amountMonthly = round2(prev.amountMonthly + s.amountMonthly);
-        prev.amountAnnual = round2(prev.amountAnnual + s.amountAnnual);
-      }
+    if (subsErr) {
+      return NextResponse.json(
+        { error: { message: `Supabase subscriptions query failed: ${subsErr.message}` } },
+        { status: 500 }
+      );
     }
-    const subscriptionsThisMonth = Array.from(subAgg.values()).sort((a, b) => b.amountMonthly - a.amountMonthly);
+
+    const subscriptionsThisMonth = (subsData ?? [])
+      .map((s: any) => ({
+        id: s.id,
+        name: (s.name || "Subscription").trim(),
+        amountMonthly: round2(Number(s.amount_monthly)),
+        amountAnnual: round2(Number(s.amount_monthly) * 12),
+        billing_day: s.billing_day,
+      }))
+      .sort((a: any, b: any) => b.amountMonthly - a.amountMonthly);
 
     // Budgets (optional)
     const { data: budgetData, error: budErr } = await supabase
@@ -422,8 +418,8 @@ export async function POST(req: Request) {
 
       notes: [
         "All values are derived from this user's transaction data.",
-        "For subscription questions, prefer subscriptionsThisMonth if present.",
-        "possibleSubscriptions requires >= 3 distinct months of repeats.",
+        "For subscription questions, use subscriptionsThisMonth (from the subscriptions table).",
+        "possibleSubscriptions requires >= 3 distinct months of repeats from transactions.",
       ],
     };
 
