@@ -1,45 +1,96 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Expense Tracker – AI Personal Finance Assistant
 
-## Getting Started
+A mobile-friendly progressive web app (PWA) for tracking spending, with an AI assistant that answers questions about your money and takes actions for you, plus receipt scanning powered by computer vision.
 
-First, run the development server:
+Built with **Next.js, TypeScript, Supabase, and Azure OpenAI** (via Azure AI Foundry), deployed on **Vercel**.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+> Screenshots: _add 2–3 images here (dashboard, AI assistant, receipt scan)._
+
+---
+
+## Features
+
+**Money tracking**
+- Log expenses and income by hand or from a receipt photo
+- Monthly budgets by category, with usage tracking
+- Savings goals with progress
+- Subscriptions and recurring bills, with recurring transactions created automatically on their due dates
+- Dashboard with available balance, top categories, daily spending, average daily spend, and end-of-month outlook
+- Installable on a phone home screen as a PWA
+
+**AI assistant (agentic)**
+- Answers questions in plain language ("How much did I spend on dining this month vs. last month?")
+- Grounded in the user's own data: the server builds a JSON summary of totals, top categories, budget usage, goals, and subscriptions, and the model is instructed to use only that context and not invent numbers
+- Returns structured actions the app can carry out:
+  - `create_transaction`: "Spent $18 on Starbucks today"
+  - `update_transaction`: "Change Marcos Tacos on Feb 2 to Dining"
+  - `list_transactions`: "Show all dining expenses last month"
+  - `propose_budgets`: "Make a budget for next month"
+  - `create_goal`: "Save $500 by June"
+- **Human in the loop:** every action is shown as a preview, and nothing is saved until the user confirms
+- Detects likely subscriptions from repeated charges across 3+ months and recommends which subscriptions and expenses to cut
+
+**Receipt scanning (computer vision + vision LLM)**
+1. Capture a receipt with the phone's rear camera
+2. Client-side preprocessing auto-crops the receipt using edge detection
+3. An Azure OpenAI vision model extracts merchant, date, total, tax, tip, and category as strict JSON, with a confidence score for each key field
+4. Results pre-fill the "Add transaction" form for review
+
+More detail: [`docs/receipt-scan-cv.md`](docs/receipt-scan-cv.md)
+
+---
+
+## Architecture
+
+```
+Next.js (App Router, React, Tailwind)
+   │
+   ├── Client pages: dashboard, transactions, budgets, goals,
+   │   income, subscriptions, settings
+   │
+   ├── API routes (server)
+   │     /api/ai                 → builds data context → Azure OpenAI → JSON {answer, suggestions, action}
+   │     /api/ai/subscriptions   → recurring-charge detection
+   │     /api/receipt            → image → Azure OpenAI vision → JSON receipt fields
+   │
+   └── Supabase (Postgres + Auth)
+         transactions, budgets, goals, subscriptions,
+         recurring_bills, paychecks, balances
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Tech stack
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Area | Tools |
+|---|---|
+| Front end | Next.js 16, React 19, TypeScript, Tailwind CSS |
+| Back end | Next.js API routes |
+| Data & auth | Supabase (PostgreSQL + Auth) |
+| AI | Azure AI Foundry / Azure OpenAI (chat + vision) |
+| Hosting | Vercel |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## AI / Computer Vision (Receipt Scan)
+## Running locally
 
-There is a “Scan receipt” button inside the **Add transaction** modal:
+```bash
+npm install
+npm run dev
+```
 
-- Client-side preprocessing: fast auto-crop using edge detection
-- Server-side extraction: `/api/receipt` calls the configured Azure Foundry (Azure OpenAI) endpoint with image input and returns strict JSON
+Create `.env.local` with:
 
-Learning notes: `docs/receipt-scan-cv.md`
+```
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+AZURE_FOUNDRY_RESPONSES_URL=
+AZURE_FOUNDRY_API_KEY=
+NEXT_PUBLIC_SHOW_CV_DEBUG=false
+```
 
-## Learn More
+Then open http://localhost:3000.
 
-To learn more about Next.js, take a look at the following resources:
+## Status
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Personal project. The live deployment is currently offline; the code runs locally with your own Supabase project and Azure OpenAI deployment.
