@@ -4,7 +4,6 @@ A mobile-friendly progressive web app (PWA) for tracking spending, with an AI as
 
 Built with **Next.js, TypeScript, Supabase, and Azure OpenAI** (via Azure AI Foundry), deployed on **Vercel**.
 
-> Screenshots: _add 2–3 images here (dashboard, AI assistant, receipt scan)._
 
 ---
 
